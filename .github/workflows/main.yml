@@ -56,6 +56,7 @@ jobs:
       - name: Fetch latest changes to Snowflake
         run: snow git fetch course_repo.public.advanced_data_engineering_snowflake
 
+
       # Deploy templates to the data environment -
       - name: Deploy templates to data environment
         run: |
