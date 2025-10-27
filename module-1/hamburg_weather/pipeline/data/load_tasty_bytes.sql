@@ -57,14 +57,15 @@ raw zone table build
 -- country table build
 
 -- todo: complete table build
-CREATE TABLE {{env}}_tasty_bytes.raw_pos.country
+CREATE OR ALTER TABLE {{env}}_tasty_bytes.raw_pos.country
 (
    country_id NUMBER(18,0),
    country VARCHAR(16777216),
    iso_currency VARCHAR(3),
    iso_country VARCHAR(2),
    city VARCHAR(16777216),
-   city_population VARCHAR(16777216)
+   city_population VARCHAR(16777216),
+   city_id NUMBER(19,0)
 );
 
 
@@ -293,17 +294,17 @@ USE WAREHOUSE demo_build_wh;
 
 
 -- country table load
--- COPY INTO {{env}}_tasty_bytes.raw_pos.country
--- (
---    country_id,
---    country,
---    iso_currency,
---    iso_country,
---    city_id,
---    city,
---    city_population
--- )
--- FROM @{{env}}_tasty_bytes.public.s3load/raw_pos/country/;
+COPY INTO {{env}}_tasty_bytes.raw_pos.country
+(
+    country_id,
+    country,
+    iso_currency,
+    iso_country,
+    city_id,
+    city,
+   city_population
+)
+ FROM @{{env}}_tasty_bytes.public.s3load/raw_pos/country/;
 
 
 -- franchise table load
@@ -339,3 +340,54 @@ FROM @{{env}}_tasty_bytes.public.s3load/raw_pos/subset_order_header/;
 -- order_detail table load
 COPY INTO {{env}}_tasty_bytes.raw_pos.order_detail
 FROM @{{env}}_tasty_bytes.public.s3load/raw_pos/subset_order_detail/;
+
+
+CREATE OR REPLACE VIEW {{env}}_tasty_bytes.harmonized.daily_weather_v
+COMMENT = 'Weather Source Daily History filtered to Tasty Bytes supported Cities'
+    AS
+SELECT
+    hd.*,
+    TO_VARCHAR(hd.date_valid_std, 'YYYY-MM') AS yyyy_mm,
+    pc.city_name AS city,
+    c.country AS country_desc
+FROM FROSTBYTE_WEATHERSOURCE.onpoint_id.history_day hd
+JOIN FROSTBYTE_WEATHERSOURCE.onpoint_id.postal_codes pc
+    ON pc.postal_code = hd.postal_code
+    AND pc.country = hd.country
+JOIN {{env}}_TASTY_BYTES.raw_pos.country c
+    ON c.iso_country = hd.country
+    AND c.city = hd.city_name;
+
+
+create or replace view {{env}}_TASTY_BYTES.HARMONIZED.WEATHER_HAMBURG(
+	DATE,
+	CITY_NAME,
+	COUNTRY_DESC,
+	DAILY_SALES,
+	AVG_TEMPERATURE_FAHRENHEIT,
+	AVG_TEMPERATURE_CELSIUS,
+	AVG_PRECIPITATION_INCHES,
+	AVG_PRECIPITATION_MILLIMETERS,
+	MAX_WIND_SPEED_100M_MPH
+) as
+SELECT
+    fd.date_valid_std AS date,
+    fd.city_name,
+    fd.country_desc,
+    ZEROIFNULL(SUM(odv.price)) AS daily_sales,
+    ROUND(AVG(fd.avg_temperature_air_2m_f),2) AS avg_temperature_fahrenheit,
+    ROUND(AVG(analytics.fahrenheit_to_celsius(fd.avg_temperature_air_2m_f)),2) AS avg_temperature_celsius,
+    ROUND(AVG(fd.tot_precipitation_in),2) AS avg_precipitation_inches,
+    ROUND(AVG(analytics.inch_to_millimeter(fd.tot_precipitation_in)),2) AS avg_precipitation_millimeters,
+    MAX(fd.max_wind_speed_100m_mph) AS max_wind_speed_100m_mph
+FROM harmonized.daily_weather_v fd
+LEFT JOIN harmonized.orders_v odv
+    ON fd.date_valid_std = DATE(odv.order_ts)
+    AND fd.city_name = odv.primary_city
+    AND fd.country_desc = odv.country
+WHERE 1=1
+    AND fd.country_desc = 'Germany'
+    AND fd.city = 'Hamburg'
+    AND fd.yyyy_mm = '2022-02'
+GROUP BY fd.date_valid_std, fd.city_name, fd.country_desc
+ORDER BY fd.date_valid_std ASC;
